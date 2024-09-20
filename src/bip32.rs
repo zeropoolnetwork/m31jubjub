@@ -4,11 +4,15 @@ use alloc::vec::Vec;
 use crate::m31::{FqBase, Fs, M31JubJubSigParams};
 use crate::eddsa::SigParams;
 use rand::{thread_rng, Rng};
-use zerocopy::AsBytes;
+use serde::Serialize;
+//use zerocopy::AsBytes;
 
 use ark_serialize::{CanonicalSerialize, CanonicalDeserialize, Compress, Validate};
 use sha2::Sha512;
 use hmac::{Hmac, Mac};
+
+use p3_field::extension::BinomialExtensionField;
+use p3_mersenne_31::Mersenne31;
 
 pub struct ChildNum {
     num: u32,
@@ -26,7 +30,7 @@ impl ChildNum {
 
 pub const MASTER_SEED: &[u8;13] = b"Zeropool seed";
 
-pub fn derive_priv(private_key: &Fs, chain_code: &[u8], num: u32) -> Option<(Fs, [u8; 32])> {
+pub fn derive_priv(private_key: &Fs, chain_code: &[u8], num: u32) -> Option<(Fs, [u8; 32], u32)> {
 //    let mut buf: [u8; 32] = [0u8; 32];
 //    let mut buf2: [u8; 32] = [0u8; 32];
 //    let x = key.serialize_compressed(&mut buf[..]).ok()?;
@@ -56,13 +60,47 @@ pub fn derive_priv(private_key: &Fs, chain_code: &[u8], num: u32) -> Option<(Fs,
     hmac_res_v.copy_from_slice(hmac_res.into_bytes().as_slice());
 
     if let Ok(tweak) = Fs::deserialize_with_mode(&hmac_res_v[0..31], Compress::Yes, Validate::Yes) {// TODO: one extra byte !!!!!!
+        libc_print::std_name::println!("tweak: {:#?}", tweak);
         let new_key = tweak + private_key;
         let mut new_chain_code: [u8; 32] = [0u8; 32];
         new_chain_code.copy_from_slice(&hmac_res_v[32..64]);
-        Some((new_key, new_chain_code))
+        Some((new_key, new_chain_code, num))
     } else {
         libc_print::std_name::println!("+1");
         derive_priv(private_key, chain_code, num+1)
+    }
+}
+
+pub fn derive_pub(pub_key: &BinomialExtensionField<BinomialExtensionField<Mersenne31, 2>, 4>, chain_code: &[u8], num: u32) -> Option<(BinomialExtensionField<BinomialExtensionField<Mersenne31, 2>, 4>, [u8; 32], u32)> {
+    if (num >> 31) != 0 {
+        // hardened child
+        return None;
+    }
+
+    let mut hmac_obj = Hmac::<Sha512>::new_from_slice(chain_code).unwrap();//.ok()?;
+    let mut hmac_res_v: [u8; 64] = [0u8; 64];
+
+    let mut ser: [u8; 33] = [0u8; 33];
+    bincode::serialize_into(&mut ser[1..], &pub_key).unwrap();
+//        libc_print::std_name::println!("{:#?}", ser);
+//        public_key.serialize_compressed(&mut ser[..]).unwrap();
+    hmac_obj.update(&ser);
+    let num_be = num.to_be_bytes();
+    hmac_obj.update(&num_be);
+    let hmac_res = hmac_obj.finalize();
+    hmac_res_v.copy_from_slice(hmac_res.into_bytes().as_slice());
+
+    if let Ok(tweak) = Fs::deserialize_with_mode(&hmac_res_v[0..31], Compress::Yes, Validate::Yes) {// TODO: one extra byte !!!!!!
+        libc_print::std_name::println!("tweak: {:#?}", tweak);
+        let sig_params = M31JubJubSigParams::default();
+        let pub_key_tweak = sig_params.public_key(tweak);//tweak + private_key;
+        let new_pub_key = *pub_key + pub_key_tweak;// + *pub_key;
+        let mut new_chain_code: [u8; 32] = [0u8; 32];
+        new_chain_code.copy_from_slice(&hmac_res_v[32..64]);
+        Some((new_pub_key, new_chain_code, num))
+    } else {
+        libc_print::std_name::println!("+1");
+        derive_pub(pub_key, chain_code, num+1)
     }
 }
 
@@ -100,5 +138,25 @@ mod tests {
 
 //        let pka: Vec<u64> = private_key.iter().collect();
 //        let private_key_arr: [u64; 4] = private_key.0.0;
+    }
+
+    #[test]
+    fn pub_test_001() {
+        let sig_params = M31JubJubSigParams::default();
+
+        let private_key: Fs = thread_rng().gen();
+
+        let public_key = sig_params.public_key(private_key);
+
+        libc_print::std_name::println!("{:#?}", private_key);
+        libc_print::std_name::println!("{:#?}", public_key);
+
+        let child_priv = derive_priv(&private_key, MASTER_SEED, 0).unwrap();
+        libc_print::std_name::println!("--------");
+        let child_pub_0 = sig_params.public_key(child_priv.0);
+        let child_pub_1 = derive_pub(&public_key, MASTER_SEED, 0).unwrap();
+        
+        assert_eq!(child_pub_1.2, child_priv.2);
+        assert_eq!(child_pub_0, child_pub_1.0);
     }
 }
