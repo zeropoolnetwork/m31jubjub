@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 
 use crate::m31::{FqBase, Fs, M31JubJubSigParams};
 use crate::eddsa::SigParams;
+use crate::curve::{Params, Point, PointProjective};
 use rand::{thread_rng, Rng};
 use serde::Serialize;
 //use zerocopy::AsBytes;
@@ -93,11 +94,14 @@ pub fn derive_pub(pub_key: &BinomialExtensionField<BinomialExtensionField<Mersen
     if let Ok(tweak) = Fs::deserialize_with_mode(&hmac_res_v[0..31], Compress::Yes, Validate::Yes) {// TODO: one extra byte !!!!!!
         libc_print::std_name::println!("tweak: {:#?}", tweak);
         let sig_params = M31JubJubSigParams::default();
-        let pub_key_tweak = sig_params.public_key(tweak);//tweak + private_key;
-        let new_pub_key = *pub_key + pub_key_tweak;// + *pub_key;
+//        let pub_key_point_tweak: PointProjective<_> = Point::<M31JubJubSigParams>::suibgroup_decompress(sig_params.public_key(tweak)).unwrap().into();//tweak + private_key;
+        let pub_key_point_tweak: PointProjective<_> = <M31JubJubSigParams as SigParams::<8>>::P::G8*tweak;//tweak + private_key;
+        let pub_key_point: PointProjective<_> = Point::subgroup_decompress(*pub_key).unwrap().into();
+        let new_pub_key_project = pub_key_point + pub_key_point_tweak;// + *pub_key;
+        let new_pub_key: Point<_> = new_pub_key_project.into();
         let mut new_chain_code: [u8; 32] = [0u8; 32];
         new_chain_code.copy_from_slice(&hmac_res_v[32..64]);
-        Some((new_pub_key, new_chain_code, num))
+        Some((new_pub_key.x, new_chain_code, num))
     } else {
         libc_print::std_name::println!("+1");
         derive_pub(pub_key, chain_code, num+1)
