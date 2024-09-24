@@ -1,14 +1,13 @@
 use core::str::FromStr;
-use core::error::Error;
+//use core::error::Error;
 use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::borrow::ToOwned;
 
-use crate::m31::{FqBase, Fs, M31JubJubSigParams};
+use crate::m31::{/*FqBase,*/ Fs, M31JubJubSigParams};
 use crate::eddsa::SigParams;
 use crate::curve::{Params, Point, PointProjective};
-use rand::{thread_rng, Rng};
-use serde::Serialize;
+//use serde::Serialize;
 //use zerocopy::AsBytes;
 
 use ark_serialize::{CanonicalSerialize, CanonicalDeserialize, Compress, Validate};
@@ -20,10 +19,12 @@ use base58::{ToBase58, FromBase58};
 use p3_field::extension::BinomialExtensionField;
 use p3_mersenne_31::Mersenne31;
 
-pub const MASTER_SEED: &[u8;13] = b"Zeropool seed";
+pub const MASTER_CHAIN_CODE: &[u8;13] = b"Zeropool seed";
 pub const EXTENDED_PRIVATE_KEY_PREFIX: &'static str = "zprv";
 pub const EXTENDED_PUBLIC_KEY_PREFIX: &'static str = "zpub";
 pub const MAINNET_NETWORK_ID: u32 = 0x5a65506f; // ZePo
+
+pub type PublicKeyType = BinomialExtensionField<BinomialExtensionField<Mersenne31, 2>, 4>;
 
 pub fn derive_priv(private_key: &Fs, chain_code: &[u8], num: u32) -> Option<(Fs, [u8; 32], u32)> {
 //    let mut buf: [u8; 32] = [0u8; 32];
@@ -55,18 +56,18 @@ pub fn derive_priv(private_key: &Fs, chain_code: &[u8], num: u32) -> Option<(Fs,
     hmac_res_v.copy_from_slice(hmac_res.into_bytes().as_slice());
 
     if let Ok(tweak) = Fs::deserialize_with_mode(&hmac_res_v[0..31], Compress::Yes, Validate::Yes) {// TODO: one extra byte !!!!!!
-        libc_print::std_name::println!("tweak: {:#?}", tweak);
+//        libc_print::std_name::println!("tweak: {:#?}", tweak);
         let new_key = tweak + private_key;
         let mut new_chain_code: [u8; 32] = [0u8; 32];
         new_chain_code.copy_from_slice(&hmac_res_v[32..64]);
         Some((new_key, new_chain_code, num))
     } else {
-        libc_print::std_name::println!("+1");
+//        libc_print::std_name::println!("+1");
         derive_priv(private_key, chain_code, num+1)
     }
 }
 
-pub fn derive_pub(pub_key: &BinomialExtensionField<BinomialExtensionField<Mersenne31, 2>, 4>, chain_code: &[u8], num: u32) -> Option<(BinomialExtensionField<BinomialExtensionField<Mersenne31, 2>, 4>, [u8; 32], u32)> {
+pub fn derive_pub(pub_key: &PublicKeyType, chain_code: &[u8], num: u32) -> Option<(PublicKeyType, [u8; 32], u32)> {
     if (num >> 31) != 0 {
         // hardened child
         return None;
@@ -86,7 +87,7 @@ pub fn derive_pub(pub_key: &BinomialExtensionField<BinomialExtensionField<Mersen
     hmac_res_v.copy_from_slice(hmac_res.into_bytes().as_slice());
 
     if let Ok(tweak) = Fs::deserialize_with_mode(&hmac_res_v[0..31], Compress::Yes, Validate::Yes) {// TODO: one extra byte !!!!!!
-        libc_print::std_name::println!("tweak: {:#?}", tweak);
+//        libc_print::std_name::println!("tweak: {:#?}", tweak);
 //        let sig_params = M31JubJubSigParams::default();
 //        let pub_key_point_tweak: PointProjective<_> = Point::<M31JubJubSigParams>::suibgroup_decompress(sig_params.public_key(tweak)).unwrap().into();//tweak + private_key;
         let pub_key_point_tweak: PointProjective<_> = <M31JubJubSigParams as SigParams::<8>>::P::G8*tweak;//tweak + private_key;
@@ -97,7 +98,7 @@ pub fn derive_pub(pub_key: &BinomialExtensionField<BinomialExtensionField<Mersen
         new_chain_code.copy_from_slice(&hmac_res_v[32..64]);
         Some((new_pub_key.x, new_chain_code, num))
     } else {
-        libc_print::std_name::println!("+1");
+//        libc_print::std_name::println!("+1");
         derive_pub(pub_key, chain_code, num+1)
     }
 }
@@ -120,7 +121,7 @@ impl To33Bytes for Fs {
     }
 }
 
-impl To33Bytes for BinomialExtensionField<BinomialExtensionField<Mersenne31, 2>, 4> {
+impl To33Bytes for PublicKeyType {
     const PADDING_LEN: usize = 1;
     #[must_use]
     fn to_33_bytes(&self, target: &mut [u8]) -> Option<()> {
@@ -168,6 +169,82 @@ impl<T: To33Bytes> ExtendedKey<T> {
     }
 }
 
+impl ExtendedKey<Fs> {
+    pub fn derive_child(&self, num: u32) -> Option<Self> {
+        let (key, chain_code, child_num) = derive_priv(&self.key, &self.chain_code, num)?;
+        let mut key_arr: [u8; 31] = [0u8; 31];
+        key.serialize_compressed(&mut key_arr[..]).ok()?;
+        Some(Self {
+            fingerprint: derive_fingerprint(&key_arr)?,
+            key,
+            chain_code,
+            child_num,
+            depth: self.depth +1,
+            is_priv: true,
+            network_id: self.network_id,
+        })
+    }
+}
+
+impl ExtendedKey<PublicKeyType> {
+    pub fn derive_child(&self, num: u32) -> Option<Self> {
+        let (key, chain_code, child_num) = derive_pub(&self.key, &self.chain_code, num)?;
+        let mut key_arr: [u8; 32] = [0u8; 32];
+        bincode::serialize_into(&mut key_arr[..], &key).ok()?;
+        Some(Self {
+            fingerprint: derive_fingerprint(&key_arr)?,
+            key,
+            chain_code,
+            child_num,
+            depth: self.depth +1,
+            is_priv: false,
+            network_id: self.network_id,
+        })
+    }
+}
+
+impl TryFrom<Fs> for ExtendedKey<Fs> {
+    type Error = ();
+
+    fn try_from(key: Fs) -> Result<Self, Self::Error> {
+        let mut key_arr: [u8; 31] = [0u8; 31];
+        key.serialize_compressed(&mut key_arr[..]).map_err(|_| ())?;
+        let mut chain_code: [u8; 32] = [0u8; 32];
+        const { assert!(MASTER_CHAIN_CODE.len() == 13); };
+        chain_code[..13].copy_from_slice(&MASTER_CHAIN_CODE[..]);
+        Ok(Self {
+            fingerprint: derive_fingerprint(&key_arr).ok_or(())?,
+            is_priv: true,
+            network_id: MAINNET_NETWORK_ID,
+            depth: 0,
+            chain_code,
+            child_num: 0,
+            key,
+        })
+    }
+}
+
+impl TryFrom<PublicKeyType> for ExtendedKey<PublicKeyType> {
+    type Error = ();
+
+    fn try_from(key: PublicKeyType) -> Result<Self, Self::Error> {
+        let mut key_arr: [u8; 32] = [0u8; 32];
+        bincode::serialize_into(&mut key_arr[..], &key).map_err(|_| ())?;
+        let mut chain_code: [u8; 32] = [0u8; 32];
+        const { assert!(MASTER_CHAIN_CODE.len() == 13); };
+        chain_code[..13].copy_from_slice(&MASTER_CHAIN_CODE[..]);
+        Ok(Self {
+            fingerprint: derive_fingerprint(&key_arr).ok_or(())?,
+            is_priv: false,
+            network_id: MAINNET_NETWORK_ID,
+            depth: 0,
+            chain_code,
+            child_num: 0,
+            key,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum ExtendedKeyFromStrError {
     StringLength,
@@ -199,8 +276,8 @@ impl ExtendedKeyConfig for ExtendedKey<Fs> {
     }
 }
 
-impl ExtendedKeyConfig for ExtendedKey<BinomialExtensionField<BinomialExtensionField<Mersenne31, 2>, 4>> {
-    type KeyType = BinomialExtensionField<BinomialExtensionField<Mersenne31, 2>, 4>;
+impl ExtendedKeyConfig for ExtendedKey<PublicKeyType> {
+    type KeyType = PublicKeyType;
     const PADDING_LEN: usize = 1;
     const IS_PRIV: bool = false;
 
@@ -253,7 +330,7 @@ where
         }
 
         if v[45..(45 + Self::PADDING_LEN)].iter().any(|&b| b != 0x00) {
-            libc_print::std_name::println!("{:#?}", &v[45..(45 + Self::PADDING_LEN)]);
+//            libc_print::std_name::println!("{:#?}", &v[45..(45 + Self::PADDING_LEN)]);
             return Err(Self::Err::KeyBytePadding);
         }
 
@@ -297,6 +374,8 @@ pub fn derive_fingerprint(key: &[u8]) -> Option<[u8; 4]> {
 mod tests {
     use super::*;
 
+    use rand::{thread_rng, Rng};
+
     #[test]
     fn priv_test_001() {
         let sig_params = M31JubJubSigParams::default();
@@ -312,8 +391,8 @@ mod tests {
 
         libc_print::std_name::println!("private_key.serialized_size(): {}", private_key.serialized_size(ark_serialize::Compress::No));
 
-//        assert!(derive_priv(&private_key, MASTER_SEED, ChildNum{ num: 0, is_hardened: true }).is_some());
-        assert!(derive_priv(&private_key, MASTER_SEED, 0).is_some());
+//        assert!(derive_priv(&private_key, MASTER_CHAIN_CODE, ChildNum{ num: 0, is_hardened: true }).is_some());
+        assert!(derive_priv(&private_key, MASTER_CHAIN_CODE, 0).is_some());
 
 //        let pka: Vec<u64> = private_key.iter().collect();
 //        let private_key_arr: [u64; 4] = private_key.0.0;
@@ -330,10 +409,10 @@ mod tests {
         libc_print::std_name::println!("{:#?}", private_key);
         libc_print::std_name::println!("{:#?}", public_key);
 
-        let child_priv = derive_priv(&private_key, MASTER_SEED, 0).unwrap();
+        let child_priv = derive_priv(&private_key, MASTER_CHAIN_CODE, 0).unwrap();
         libc_print::std_name::println!("--------");
         let child_pub_0 = sig_params.public_key(child_priv.0);
-        let child_pub_1 = derive_pub(&public_key, MASTER_SEED, 0).unwrap();
+        let child_pub_1 = derive_pub(&public_key, MASTER_CHAIN_CODE, 0).unwrap();
         
         assert_eq!(child_pub_1.2, child_priv.2);
         assert_eq!(child_pub_0, child_pub_1.0);
@@ -372,7 +451,7 @@ mod tests {
         let sig_params = M31JubJubSigParams::default();
 
         let private_key: Fs = thread_rng().gen();
-        let public_key: BinomialExtensionField<BinomialExtensionField<Mersenne31, 2>, 4> = sig_params.public_key(private_key);
+        let public_key: PublicKeyType = sig_params.public_key(private_key);
 
         let mut private_key_arr: [u8; 32] = [0u8; 32];
         private_key.serialize_compressed(&mut private_key_arr[..32]).unwrap();
@@ -391,8 +470,48 @@ mod tests {
 
         libc_print::std_name::println!("{}", encoded);
         
-        let ext2: ExtendedKey<BinomialExtensionField<BinomialExtensionField<Mersenne31, 2>, 4>> = encoded.parse().unwrap();
+        let ext2: ExtendedKey<PublicKeyType> = encoded.parse().unwrap();
 
         assert_eq!(ext, ext2);
+    }
+
+    #[test]
+    fn priv_test_003_extend_key_derive_child() {
+        let private_key: Fs = thread_rng().gen();
+
+        let ext: ExtendedKey<Fs> = private_key.try_into().unwrap();
+
+        let child_0 = ext.derive_child(0).unwrap();
+        let (child_priv, child_chain_code, child_num) = derive_priv(&private_key, &MASTER_CHAIN_CODE[..], 0).unwrap();
+        let child_1 = {
+            let mut tmp: ExtendedKey<Fs> = child_priv.try_into().unwrap();
+            tmp.chain_code = child_chain_code;
+            tmp.child_num = child_num;
+            tmp.depth = 1;
+            tmp
+        };
+
+        assert_eq!(child_0, child_1);
+    }
+
+    #[test]
+    fn pub_test_003_extend_key_derive_child() {
+        let sig_params = M31JubJubSigParams::default();
+        let private_key: Fs = thread_rng().gen();
+        let public_key = sig_params.public_key(private_key);
+
+        let ext: ExtendedKey<_> = public_key.try_into().unwrap();
+
+        let child_0 = ext.derive_child(0).unwrap();
+        let (child_pub, child_chain_code, child_num) = derive_pub(&public_key, &MASTER_CHAIN_CODE[..], 0).unwrap();
+        let child_1 = {
+            let mut tmp: ExtendedKey<_> = child_pub.try_into().unwrap();
+            tmp.chain_code = child_chain_code;
+            tmp.child_num = child_num;
+            tmp.depth = 1;
+            tmp
+        };
+
+        assert_eq!(child_0, child_1);
     }
 }
