@@ -2,7 +2,7 @@ use core::str::FromStr;
 //use core::error::Error;
 use alloc::vec::Vec;
 use alloc::string::String;
-use alloc::borrow::ToOwned;
+//use alloc::borrow::ToOwned;
 
 use crate::m31::{/*FqBase,*/ Fs, M31JubJubSigParams};
 use crate::eddsa::SigParams;
@@ -20,9 +20,10 @@ use p3_field::extension::BinomialExtensionField;
 use p3_mersenne_31::Mersenne31;
 
 pub const MASTER_CHAIN_CODE: &[u8;13] = b"Zeropool seed";
-pub const EXTENDED_PRIVATE_KEY_PREFIX: &'static str = "zprv";
-pub const EXTENDED_PUBLIC_KEY_PREFIX: &'static str = "zpub";
-pub const MAINNET_NETWORK_ID: u32 = 0x5a65506f; // ZePo
+pub const EXTENDED_PRIVATE_KEY_PREFIX: &'static str = "xprv"; //"zprv";
+pub const EXTENDED_PUBLIC_KEY_PREFIX: &'static str = "xpub"; //"zpub";
+pub const MAINNET_NETWORK_ID_PRIVATE: u32 = 0x0488ADE4; // 0x5a65506f; // ZePo
+pub const MAINNET_NETWORK_ID_PUBLIC: u32 = 0x0488B21E; // 0x5a65506f; // ZePo
 
 pub type PublicKeyType = BinomialExtensionField<BinomialExtensionField<Mersenne31, 2>, 4>;
 
@@ -116,6 +117,9 @@ impl To33Bytes for Fs {
         if target.len() != 33 {
             return None;
         }
+        for i in 0..Self::PADDING_LEN {
+            target[i] = 0x00;
+        }
         self.serialize_compressed(&mut target[Self::PADDING_LEN..33]).ok()?;
         Some(())
     }
@@ -127,6 +131,9 @@ impl To33Bytes for PublicKeyType {
     fn to_33_bytes(&self, target: &mut [u8]) -> Option<()> {
         if target.len() != 33 {
             return None;
+        }
+        for i in 0..Self::PADDING_LEN {
+            target[i] = 0x00;
         }
         bincode::serialize_into(&mut target[Self::PADDING_LEN..33], self).ok()?;
         Some(())
@@ -161,9 +168,9 @@ impl<T: To33Bytes> ExtendedKey<T> {
         let res_1: [u8; 32] = hasher.finalize().into();
         arr[78..82].copy_from_slice(&res_1[..4]);
         let target = if self.is_priv {
-            EXTENDED_PRIVATE_KEY_PREFIX.to_owned() + &arr.to_base58()
+            /*EXTENDED_PRIVATE_KEY_PREFIX.to_owned() + &*/arr.to_base58()
         } else {
-            EXTENDED_PUBLIC_KEY_PREFIX.to_owned() + &arr.to_base58()
+            /*EXTENDED_PUBLIC_KEY_PREFIX.to_owned() + &*/arr.to_base58()
         };
         Some(target)
     }
@@ -215,7 +222,7 @@ impl TryFrom<Fs> for ExtendedKey<Fs> {
         Ok(Self {
             fingerprint: derive_fingerprint(&key_arr).ok_or(())?,
             is_priv: true,
-            network_id: MAINNET_NETWORK_ID,
+            network_id: MAINNET_NETWORK_ID_PRIVATE,
             depth: 0,
             chain_code,
             child_num: 0,
@@ -236,7 +243,7 @@ impl TryFrom<PublicKeyType> for ExtendedKey<PublicKeyType> {
         Ok(Self {
             fingerprint: derive_fingerprint(&key_arr).ok_or(())?,
             is_priv: false,
-            network_id: MAINNET_NETWORK_ID,
+            network_id: MAINNET_NETWORK_ID_PUBLIC,
             depth: 0,
             chain_code,
             child_num: 0,
@@ -429,7 +436,7 @@ mod tests {
 
         let ext = ExtendedKey {
             is_priv: true,
-            network_id: MAINNET_NETWORK_ID,
+            network_id: MAINNET_NETWORK_ID_PRIVATE,
             depth: 0,
             fingerprint: derive_fingerprint(&private_key_arr).unwrap(),
             child_num: 0,
@@ -458,7 +465,7 @@ mod tests {
 
         let ext = ExtendedKey {
             is_priv: false,
-            network_id: MAINNET_NETWORK_ID,
+            network_id: MAINNET_NETWORK_ID_PUBLIC,
             depth: 0,
             fingerprint: derive_fingerprint(&private_key_arr).unwrap(),
             child_num: 0,

@@ -54,8 +54,6 @@ where
 
 pub fn mnemonic_to_bytes_validate<'a, T, TT>(mnemonic: T) -> Result<Vec<u8>, MnemonicError>
 where
-//    TT: for<'a> Borrow<&'a str> + 'static,
-//    T: for<'a> Borrow<&'a [TT]> + 'static
     TT: Borrow<str> + 'a,
     T: Borrow<[TT]> + 'a
 {
@@ -86,7 +84,7 @@ pub fn seed_to_extended_key(seed: &[u8; 64]) -> Option<bip32::ExtendedKey<Fs>> {
     let key = Fs::deserialize_compressed(&seed[0..31]).ok()?;
     Some(bip32::ExtendedKey {
         is_priv: true,
-        network_id: bip32::MAINNET_NETWORK_ID,
+        network_id: bip32::MAINNET_NETWORK_ID_PRIVATE,
         depth: 0,
         fingerprint: bip32::derive_fingerprint(&seed[0..31])?,
         child_num: 0,
