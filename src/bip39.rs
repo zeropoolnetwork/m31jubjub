@@ -80,13 +80,12 @@ pub fn bytes_to_seed(bs: &[u8], passphrase: &str) -> [u8; 64] {
     pbkdf2_hmac_array::<Sha512, 64>(password, salt.as_bytes(), NUMBER_OF_ROUNDS)
 }
 
-pub fn seed_to_extended_key(seed: &[u8; 64]) -> Option<bip32::ExtendedKey<Fs>> {
-    let key = Fs::deserialize_compressed(&seed[0..31]).ok()?;
+pub fn seed_to_extended_key(seed: &[u8; 64]) -> Option<bip32::ExtendedKey<Fs, bip32::PublicKeyType>> {
+    let key = bip32::KeyTypes::from_priv(Fs::deserialize_compressed(&seed[0..bip32::PRIV_SIZE]).ok()?);
     Some(bip32::ExtendedKey {
-        is_priv: true,
         network_id: bip32::MAINNET_NETWORK_ID_PRIVATE,
         depth: 0,
-        fingerprint: bip32::derive_fingerprint(&seed[0..31])?,
+        fingerprint: bip32::derive_fingerprint(&seed[0..bip32::PRIV_SIZE])?,
         child_num: 0,
         chain_code: {
             let mut tmp = [0u8; 32];
@@ -154,7 +153,7 @@ pub fn entropy_to_mnemonic(mut entropy: u128) -> Result<[&'static str; 12], Mnem
     Ok(mnemonic)
 }
 
-pub fn generate_mnemonic() -> ([&'static str; 12], bip32::ExtendedKey<Fs>) {
+pub fn generate_mnemonic() -> ([&'static str; 12], bip32::ExtendedKey<Fs, bip32::PublicKeyType>) {
     use rand::{thread_rng, Rng};
 
     let mut mnemonic_v;

@@ -19,89 +19,100 @@ use base58::{ToBase58, FromBase58};
 use p3_field::extension::BinomialExtensionField;
 use p3_mersenne_31::Mersenne31;
 
+mod internal;
+mod extended_key;
+mod key_types;
+
+
+pub use extended_key::*;
+pub use key_types::*;
+pub use internal::*;
+
 pub const MASTER_CHAIN_CODE: &[u8;13] = b"Zeropool seed";
 pub const EXTENDED_PRIVATE_KEY_PREFIX: &'static str = "xprv"; //"zprv";
 pub const EXTENDED_PUBLIC_KEY_PREFIX: &'static str = "xpub"; //"zpub";
 pub const MAINNET_NETWORK_ID_PRIVATE: u32 = 0x0488ADE4; // 0x5a65506f; // ZePo
 pub const MAINNET_NETWORK_ID_PUBLIC: u32 = 0x0488B21E; // 0x5a65506f; // ZePo
 
+pub const PUB_PRIV_UNION_SIZE: usize = 33;
+pub const PRIV_SIZE: usize = 31;
+pub const PUB_SIZE: usize = 32;
+pub const EXTENDED_KEY_SIZE: usize = 45 + PUB_PRIV_UNION_SIZE + EXTENDED_KEY_CHECKSUM_SIZE;
+pub const EXTENDED_KEY_SIZE_WITHOUT_CHECKSUM: usize = EXTENDED_KEY_SIZE - EXTENDED_KEY_CHECKSUM_SIZE;
+pub const EXTENDED_KEY_CHECKSUM_SIZE: usize = 4;
+
 pub type PublicKeyType = BinomialExtensionField<BinomialExtensionField<Mersenne31, 2>, 4>;
 
-pub fn derive_priv(private_key: &Fs, chain_code: &[u8], num: u32) -> Option<(Fs, [u8; 32], u32)> {
-//    let mut buf: [u8; 32] = [0u8; 32];
-//    let mut buf2: [u8; 32] = [0u8; 32];
-//    let x = key.serialize_compressed(&mut buf[..]).ok()?;
-//    let y = key.serialize_uncompressed(&mut buf2[..]).ok()?;
-//    assert_eq!(buf, buf2);
+pub trait PrivateKeyTrait: To33Bytes + Clone + Sized {
+    type PublicType: PublicKeyTrait;
+    const NETWORK_ID_PRIVATE: u32;
+    fn derive_priv(&self, chain_code: &[u8], num: u32) -> Option<(Self, [u8; 32], u32)>;
+    fn get_public_key(&self) -> Self::PublicType;
+}
 
-    let mut hmac_obj = Hmac::<Sha512>::new_from_slice(chain_code).unwrap();//.ok()?;
-    let mut hmac_res_v: [u8; 64] = [0u8; 64];
+pub trait GetPrivateKey {
+    type PrivateType: PublicKeyTrait;
+    fn get_private_key(&self) -> impl core::borrow::Borrow<Self::PrivateType>;
+}
 
-    if (num >> 31) == 0 {
-        let sig_params = M31JubJubSigParams::default();
-        let public_key = sig_params.public_key(*private_key);
-        let mut ser: [u8; 33] = [0u8; 33];
-        bincode::serialize_into(&mut ser[1..], &public_key).unwrap();
-//        libc_print::std_name::println!("{:#?}", ser);
-//        public_key.serialize_compressed(&mut ser[..]).unwrap();
-        hmac_obj.update(&ser);
-    } else {
-        let mut source: [u8; 33] = [0u8; 33];
-        assert_eq!(private_key.serialized_size(Compress::Yes), 31);
-        private_key.serialize_compressed(&mut source[1..32]).unwrap();
-        hmac_obj.update(&source);
-    }
-    let num_be = num.to_be_bytes();
-    hmac_obj.update(&num_be);
-    let hmac_res = hmac_obj.finalize();
-    hmac_res_v.copy_from_slice(hmac_res.into_bytes().as_slice());
+pub trait DerivePrivate: GetPrivateKey {
+    fn derive_priv(&self, chain_code: &[u8], num: u32) -> Option<(Self::PrivateType, [u8; 32], u32)>;
+}
 
-    if let Ok(tweak) = Fs::deserialize_with_mode(&hmac_res_v[0..31], Compress::Yes, Validate::Yes) {// TODO: one extra byte !!!!!!
-//        libc_print::std_name::println!("tweak: {:#?}", tweak);
-        let new_key = tweak + private_key;
-        let mut new_chain_code: [u8; 32] = [0u8; 32];
-        new_chain_code.copy_from_slice(&hmac_res_v[32..64]);
-        Some((new_key, new_chain_code, num))
-    } else {
-//        libc_print::std_name::println!("+1");
-        derive_priv(private_key, chain_code, num+1)
+pub trait PublicKeyTrait: To33Bytes + Clone + Sized {
+    const NETWORK_ID_PUBLIC: u32;
+    fn derive_pub_unchecked(&self, chain_code: &[u8], num: u32) -> Option<(Self, [u8; 32], u32)>;
+    fn derive_pub(&self, chain_code: &[u8], num: u32) -> Option<(Self, [u8; 32], u32)> {
+        if (num>>31) != 0 {
+            None
+        } else {
+            let (new_pub_key, new_chain_code, new_num) = Self::derive_pub_unchecked(self, chain_code, num)?;
+            if (new_num >> 31) != 0 {
+                None
+            } else {
+                Some((new_pub_key, new_chain_code, new_num))
+            }
+        }
     }
 }
+
+pub trait GetPublicKey {
+    type PublicType: PublicKeyTrait;
+    fn get_public_key(&self) -> impl core::borrow::Borrow<Self::PublicType>;
+}
+
+pub trait DerivePublic: GetPublicKey {
+    fn derive_pub(&self, chain_code: &[u8], num: u32) -> Option<(Self::PublicType, [u8; 32], u32)>;
+}
+
+
+
+impl PrivateKeyTrait for Fs {
+    type PublicType = PublicKeyType;
+    const NETWORK_ID_PRIVATE: u32 = MAINNET_NETWORK_ID_PRIVATE;
+    fn derive_priv(&self, chain_code: &[u8], num: u32) -> Option<(Self, [u8; 32], u32)> {
+        internal::derive_priv(self, chain_code, num)
+    }
+    fn get_public_key(&self) -> Self::PublicType {
+        let sig_params  = M31JubJubSigParams::default();
+        sig_params.public_key(*self)
+    }
+}
+
+impl PublicKeyTrait for PublicKeyType {
+    const NETWORK_ID_PUBLIC: u32 = MAINNET_NETWORK_ID_PUBLIC;
+    fn derive_pub_unchecked(&self, chain_code: &[u8], num: u32) -> Option<(Self, [u8; 32], u32)> {
+        internal::derive_pub_unchecked(self, chain_code, num)
+    }
+}
+
 
 pub fn derive_pub(pub_key: &PublicKeyType, chain_code: &[u8], num: u32) -> Option<(PublicKeyType, [u8; 32], u32)> {
     if (num >> 31) != 0 {
         // hardened child
         return None;
     }
-
-    let mut hmac_obj = Hmac::<Sha512>::new_from_slice(chain_code).unwrap();//.ok()?;
-    let mut hmac_res_v: [u8; 64] = [0u8; 64];
-
-    let mut ser: [u8; 33] = [0u8; 33];
-    bincode::serialize_into(&mut ser[1..], &pub_key).unwrap();
-//        libc_print::std_name::println!("{:#?}", ser);
-//        public_key.serialize_compressed(&mut ser[..]).unwrap();
-    hmac_obj.update(&ser);
-    let num_be = num.to_be_bytes();
-    hmac_obj.update(&num_be);
-    let hmac_res = hmac_obj.finalize();
-    hmac_res_v.copy_from_slice(hmac_res.into_bytes().as_slice());
-
-    if let Ok(tweak) = Fs::deserialize_with_mode(&hmac_res_v[0..31], Compress::Yes, Validate::Yes) {// TODO: one extra byte !!!!!!
-//        libc_print::std_name::println!("tweak: {:#?}", tweak);
-//        let sig_params = M31JubJubSigParams::default();
-//        let pub_key_point_tweak: PointProjective<_> = Point::<M31JubJubSigParams>::suibgroup_decompress(sig_params.public_key(tweak)).unwrap().into();//tweak + private_key;
-        let pub_key_point_tweak: PointProjective<_> = <M31JubJubSigParams as SigParams::<8>>::P::G8*tweak;//tweak + private_key;
-        let pub_key_point: PointProjective<_> = Point::subgroup_decompress(*pub_key).unwrap().into();
-        let new_pub_key_project = pub_key_point + pub_key_point_tweak;// + *pub_key;
-        let new_pub_key: Point<_> = new_pub_key_project.into();
-        let mut new_chain_code: [u8; 32] = [0u8; 32];
-        new_chain_code.copy_from_slice(&hmac_res_v[32..64]);
-        Some((new_pub_key.x, new_chain_code, num))
-    } else {
-//        libc_print::std_name::println!("+1");
-        derive_pub(pub_key, chain_code, num+1)
-    }
+    internal::derive_pub_unchecked(pub_key, chain_code, num)
 }
 
 pub trait To33Bytes {
@@ -111,22 +122,22 @@ pub trait To33Bytes {
 }
 
 impl To33Bytes for Fs {
-    const PADDING_LEN: usize = 2;
+    const PADDING_LEN: usize = PUB_PRIV_UNION_SIZE - PRIV_SIZE;
     #[must_use]
     fn to_33_bytes(&self, target: &mut [u8]) -> Option<()> {
-        if target.len() != 33 {
+        if target.len() != PUB_PRIV_UNION_SIZE {
             return None;
         }
         for i in 0..Self::PADDING_LEN {
             target[i] = 0x00;
         }
-        self.serialize_compressed(&mut target[Self::PADDING_LEN..33]).ok()?;
+        self.serialize_compressed(&mut target[Self::PADDING_LEN..PUB_PRIV_UNION_SIZE]).ok()?;
         Some(())
     }
 }
 
 impl To33Bytes for PublicKeyType {
-    const PADDING_LEN: usize = 1;
+    const PADDING_LEN: usize = PUB_PRIV_UNION_SIZE - PUB_SIZE;
     #[must_use]
     fn to_33_bytes(&self, target: &mut [u8]) -> Option<()> {
         if target.len() != 33 {
@@ -135,246 +146,14 @@ impl To33Bytes for PublicKeyType {
         for i in 0..Self::PADDING_LEN {
             target[i] = 0x00;
         }
-        bincode::serialize_into(&mut target[Self::PADDING_LEN..33], self).ok()?;
+        bincode::serialize_into(&mut target[Self::PADDING_LEN..PUB_PRIV_UNION_SIZE], self).ok()?;
         Some(())
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ExtendedKey<T: To33Bytes> {
-    pub is_priv: bool,
-    pub network_id: u32,
-    pub depth: u8,
-    pub fingerprint: [u8; 4],
-    pub child_num: u32,
-    pub chain_code: [u8; 32],
-    pub key: T,
-}
-
-impl<T: To33Bytes> ExtendedKey<T> {
-    pub fn encode(&self) -> Option<String> {
-        let mut arr: [u8;82] = [0u8; 82];
-        arr[..4].copy_from_slice(&self.network_id.to_be_bytes()[..]);
-        arr[4] = self.depth;
-        arr[5..9].copy_from_slice(&self.fingerprint[..]);
-        arr[9..13].copy_from_slice(&self.child_num.to_be_bytes()[..]);
-        arr[13..45].copy_from_slice(&self.chain_code[..]);
-        self.key.to_33_bytes(&mut arr[45..78])?;
-        let mut hasher = Sha256::new();
-        hasher.update(&arr[0..78]);
-        let res_0: [u8; 32] = hasher.finalize().into();
-        let mut hasher = Sha256::new();
-        hasher.update(&res_0[0..32]);
-        let res_1: [u8; 32] = hasher.finalize().into();
-        arr[78..82].copy_from_slice(&res_1[..4]);
-        let target = if self.is_priv {
-            /*EXTENDED_PRIVATE_KEY_PREFIX.to_owned() + &*/arr.to_base58()
-        } else {
-            /*EXTENDED_PUBLIC_KEY_PREFIX.to_owned() + &*/arr.to_base58()
-        };
-        Some(target)
-    }
-}
-
-impl ExtendedKey<Fs> {
-    pub fn derive_child(&self, num: u32) -> Option<Self> {
-        let (key, chain_code, child_num) = derive_priv(&self.key, &self.chain_code, num)?;
-        let mut key_arr: [u8; 31] = [0u8; 31];
-        key.serialize_compressed(&mut key_arr[..]).ok()?;
-        Some(Self {
-            fingerprint: derive_fingerprint(&key_arr)?,
-            key,
-            chain_code,
-            child_num,
-            depth: self.depth +1,
-            is_priv: true,
-            network_id: self.network_id,
-        })
-    }
-}
-
-impl ExtendedKey<PublicKeyType> {
-    pub fn derive_child(&self, num: u32) -> Option<Self> {
-        let (key, chain_code, child_num) = derive_pub(&self.key, &self.chain_code, num)?;
-        let mut key_arr: [u8; 32] = [0u8; 32];
-        bincode::serialize_into(&mut key_arr[..], &key).ok()?;
-        Some(Self {
-            fingerprint: derive_fingerprint(&key_arr)?,
-            key,
-            chain_code,
-            child_num,
-            depth: self.depth +1,
-            is_priv: false,
-            network_id: self.network_id,
-        })
-    }
-}
-
-impl TryFrom<Fs> for ExtendedKey<Fs> {
-    type Error = ();
-
-    fn try_from(key: Fs) -> Result<Self, Self::Error> {
-        let mut key_arr: [u8; 31] = [0u8; 31];
-        key.serialize_compressed(&mut key_arr[..]).map_err(|_| ())?;
-        let mut chain_code: [u8; 32] = [0u8; 32];
-        const { assert!(MASTER_CHAIN_CODE.len() == 13); };
-        chain_code[..13].copy_from_slice(&MASTER_CHAIN_CODE[..]);
-        Ok(Self {
-            fingerprint: derive_fingerprint(&key_arr).ok_or(())?,
-            is_priv: true,
-            network_id: MAINNET_NETWORK_ID_PRIVATE,
-            depth: 0,
-            chain_code,
-            child_num: 0,
-            key,
-        })
-    }
-}
-
-impl TryFrom<PublicKeyType> for ExtendedKey<PublicKeyType> {
-    type Error = ();
-
-    fn try_from(key: PublicKeyType) -> Result<Self, Self::Error> {
-        let mut key_arr: [u8; 32] = [0u8; 32];
-        bincode::serialize_into(&mut key_arr[..], &key).map_err(|_| ())?;
-        let mut chain_code: [u8; 32] = [0u8; 32];
-        const { assert!(MASTER_CHAIN_CODE.len() == 13); };
-        chain_code[..13].copy_from_slice(&MASTER_CHAIN_CODE[..]);
-        Ok(Self {
-            fingerprint: derive_fingerprint(&key_arr).ok_or(())?,
-            is_priv: false,
-            network_id: MAINNET_NETWORK_ID_PUBLIC,
-            depth: 0,
-            chain_code,
-            child_num: 0,
-            key,
-        })
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum ExtendedKeyFromStrError {
-    StringLength,
-    Prefix,
-    Base58Err,
-    DecodedLength,
-    CheckSum,
-    NetworkId,
-    ChildNum,
-    KeyBytePadding,
-    Key,
-}
-
-trait ExtendedKeyConfig {
-    type KeyType;
-    const PADDING_LEN: usize;
-    const IS_PRIV: bool;
-    
-    fn from_bytes(bs: &[u8]) -> Option<Self::KeyType>;
-}
-
-impl ExtendedKeyConfig for ExtendedKey<Fs> {
-    type KeyType = Fs;
-    const PADDING_LEN: usize = 2;
-    const IS_PRIV: bool = true;
-
-    fn from_bytes(bs: &[u8]) -> Option<Self::KeyType> {
-        Self::KeyType::deserialize_compressed(bs).ok()
-    }
-}
-
-impl ExtendedKeyConfig for ExtendedKey<PublicKeyType> {
-    type KeyType = PublicKeyType;
-    const PADDING_LEN: usize = 1;
-    const IS_PRIV: bool = false;
-
-    fn from_bytes(bs: &[u8]) -> Option<Self::KeyType> {
-        bincode::deserialize(bs).ok()
-    }
-}
-
-impl<T> FromStr for ExtendedKey<T>
-where
-    T: To33Bytes,
-// supported only for types, not consts
-//    T: To33Bytes<PADDING_LEN = <ExtendedKey<T> as ExtendedKeyConfig>::PADDING_LEN>,
-    ExtendedKey<T>: ExtendedKeyConfig<KeyType = T>,
-// equality constrains are not yet supported
-//    <T as To33Bytes>::PADDING_LEN = <ExtendedKey<T> as ExtendedKeyConfig>::PADDING_LEN
-{
-    type Err = ExtendedKeyFromStrError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        assert_eq!(T::PADDING_LEN, Self::PADDING_LEN);
-        if s.len() < 4 {
-            return Err(Self::Err::StringLength);
-        }
-        match Self::IS_PRIV {
-            true => {
-                if &s[..4] != EXTENDED_PRIVATE_KEY_PREFIX {
-                    return Err(Self::Err::Prefix);
-                }
-            },
-            false => {
-                if &s[..4] != EXTENDED_PUBLIC_KEY_PREFIX {
-                    return Err(Self::Err::Prefix);
-                }
-            }
-        }
-        let v: Vec<u8> = FromBase58::from_base58(&s[4..]).map_err(|_| Self::Err::Base58Err)?;
-        if v.len() != 82 {
-            return Err(Self::Err::DecodedLength);
-        }
-        
-        let mut hasher = Sha256::new();
-        hasher.update(&v[0..78]);
-        let res_0: [u8; 32] = hasher.finalize().into();
-        let mut hasher = Sha256::new();
-        hasher.update(&res_0[0..32]);
-        let res_1: [u8; 32] = hasher.finalize().into();
-        if res_1[..4] != v[78..82] {
-            return Err(Self::Err::CheckSum);
-        }
-
-        if v[45..(45 + Self::PADDING_LEN)].iter().any(|&b| b != 0x00) {
-//            libc_print::std_name::println!("{:#?}", &v[45..(45 + Self::PADDING_LEN)]);
-            return Err(Self::Err::KeyBytePadding);
-        }
-
-        let Some(key) = Self::from_bytes(&v[(45 + Self::PADDING_LEN)..]) else {
-            return Err(Self::Err::Key);
-        };
-
-        Ok(Self {
-            is_priv: Self::IS_PRIV,
-            network_id: u32::from_be_bytes(v[0..4].try_into().map_err(|_| Self::Err::NetworkId)?),
-            depth: v[4],
-            fingerprint: {
-                let mut arr: [u8; 4] = [0u8; 4];
-                arr.copy_from_slice(&v[5..9]);
-                arr
-            },
-            child_num: u32::from_be_bytes(v[9..13].try_into().map_err(|_| Self::Err::ChildNum)?),
-            chain_code: {
-                let mut arr: [u8; 32] = [0u8; 32];
-                arr.copy_from_slice(&v[13..45]);
-                arr
-            },
-            key,
-        })
-    }
-}
-
-pub fn derive_fingerprint(key: &[u8]) -> Option<[u8; 4]> {
-    let mut hasher = Sha256::new();
-    hasher.update(key);
-    let res: [u8; 32] = hasher.finalize().into();
-    let mut hasher2 = Ripemd160::new();
-    hasher2.update(&res[..]);
-    let res2: [u8; 20] = hasher2.finalize().into();
-    let mut res3: [u8; 4] = [0u8; 4];
-    res3.copy_from_slice(&res2[..4]);
-    Some(res3)
+pub trait To33BytesOblique {
+    fn to_33_bytes(&self, target: &mut [u8]) -> Option<()>;
+    fn padding(&self) -> usize;
 }
 
 #[cfg(test)]
@@ -399,7 +178,7 @@ mod tests {
         libc_print::std_name::println!("private_key.serialized_size(): {}", private_key.serialized_size(ark_serialize::Compress::No));
 
 //        assert!(derive_priv(&private_key, MASTER_CHAIN_CODE, ChildNum{ num: 0, is_hardened: true }).is_some());
-        assert!(derive_priv(&private_key, MASTER_CHAIN_CODE, 0).is_some());
+        assert!(internal::derive_priv(&private_key, MASTER_CHAIN_CODE, 0).is_some());
 
 //        let pka: Vec<u64> = private_key.iter().collect();
 //        let private_key_arr: [u64; 4] = private_key.0.0;
@@ -416,13 +195,35 @@ mod tests {
         libc_print::std_name::println!("{:#?}", private_key);
         libc_print::std_name::println!("{:#?}", public_key);
 
-        let child_priv = derive_priv(&private_key, MASTER_CHAIN_CODE, 0).unwrap();
+        let child_priv = internal::derive_priv(&private_key, MASTER_CHAIN_CODE, 0).unwrap();
         libc_print::std_name::println!("--------");
         let child_pub_0 = sig_params.public_key(child_priv.0);
         let child_pub_1 = derive_pub(&public_key, MASTER_CHAIN_CODE, 0).unwrap();
         
         assert_eq!(child_pub_1.2, child_priv.2);
         assert_eq!(child_pub_0, child_pub_1.0);
+    }
+
+    #[test]
+    fn pub_test_001_hardened() {
+        let sig_params = M31JubJubSigParams::default();
+
+        let private_key: Fs = thread_rng().gen();
+
+        let public_key = sig_params.public_key(private_key);
+
+        libc_print::std_name::println!("{:#?}", private_key);
+        libc_print::std_name::println!("{:#?}", public_key);
+
+        let child_priv = internal::derive_priv(&private_key, MASTER_CHAIN_CODE, (1<<31) + 44).unwrap();
+        libc_print::std_name::println!("--------");
+        let child_pub_0 = sig_params.public_key(child_priv.0);
+
+        assert!(derive_pub(&public_key, MASTER_CHAIN_CODE, (1<<31) + 44).is_none());
+//        let child_pub_1 = derive_pub(&public_key, MASTER_CHAIN_CODE, (1<<31) + 44).unwrap();
+//        
+//        assert_eq!(child_pub_1.2, child_priv.2);
+//        assert_eq!(child_pub_0, child_pub_1.0);
     }
 
     #[test]
@@ -435,20 +236,19 @@ mod tests {
         private_key.serialize_compressed(&mut private_key_arr[..32]).unwrap();
 
         let ext = ExtendedKey {
-            is_priv: true,
             network_id: MAINNET_NETWORK_ID_PRIVATE,
             depth: 0,
-            fingerprint: derive_fingerprint(&private_key_arr).unwrap(),
+            fingerprint: extended_key::derive_fingerprint(&private_key_arr).unwrap(),
             child_num: 0,
             chain_code: Default::default(),
-            key: private_key,//: private_key_arr,
+            key: KeyTypes::from_priv(private_key),//: private_key_arr,
         };
 
         let encoded = ext.encode().unwrap();
 
         libc_print::std_name::println!("{}", encoded);
         
-        let ext2: ExtendedKey<Fs> = encoded.parse().unwrap();
+        let ext2: ExtendedKey<Fs, PublicKeyType> = encoded.parse().unwrap();
 
         assert_eq!(ext, ext2);
     }
@@ -464,20 +264,19 @@ mod tests {
         private_key.serialize_compressed(&mut private_key_arr[..32]).unwrap();
 
         let ext = ExtendedKey {
-            is_priv: false,
             network_id: MAINNET_NETWORK_ID_PUBLIC,
             depth: 0,
-            fingerprint: derive_fingerprint(&private_key_arr).unwrap(),
+            fingerprint: extended_key::derive_fingerprint(&private_key_arr).unwrap(),
             child_num: 0,
             chain_code: Default::default(),
-            key: public_key,//: private_key_arr,
+            key: KeyTypes::from_pub(public_key),//: private_key_arr,
         };
 
         let encoded = ext.encode().unwrap();
 
         libc_print::std_name::println!("{}", encoded);
         
-        let ext2: ExtendedKey<PublicKeyType> = encoded.parse().unwrap();
+        let ext2: ExtendedKey<Fs, PublicKeyType> = encoded.parse().unwrap();
 
         assert_eq!(ext, ext2);
     }
@@ -486,12 +285,12 @@ mod tests {
     fn priv_test_003_extend_key_derive_child() {
         let private_key: Fs = thread_rng().gen();
 
-        let ext: ExtendedKey<Fs> = private_key.try_into().unwrap();
+        let ext: ExtendedKey<Fs, PublicKeyType> = ExtendedKey::try_from_priv(private_key).unwrap();//.try_into().unwrap();
 
         let child_0 = ext.derive_child(0).unwrap();
-        let (child_priv, child_chain_code, child_num) = derive_priv(&private_key, &MASTER_CHAIN_CODE[..], 0).unwrap();
+        let (child_priv, child_chain_code, child_num) = internal::derive_priv(&private_key, &MASTER_CHAIN_CODE[..], 0).unwrap();
         let child_1 = {
-            let mut tmp: ExtendedKey<Fs> = child_priv.try_into().unwrap();
+            let mut tmp: ExtendedKey<Fs, PublicKeyType> = ExtendedKey::try_from_priv(child_priv).unwrap();//.try_into().unwrap();
             tmp.chain_code = child_chain_code;
             tmp.child_num = child_num;
             tmp.depth = 1;
@@ -507,12 +306,12 @@ mod tests {
         let private_key: Fs = thread_rng().gen();
         let public_key = sig_params.public_key(private_key);
 
-        let ext: ExtendedKey<_> = public_key.try_into().unwrap();
+        let ext: ExtendedKey<Fs, PublicKeyType> = ExtendedKey::try_from_pub(public_key).unwrap();
 
         let child_0 = ext.derive_child(0).unwrap();
         let (child_pub, child_chain_code, child_num) = derive_pub(&public_key, &MASTER_CHAIN_CODE[..], 0).unwrap();
         let child_1 = {
-            let mut tmp: ExtendedKey<_> = child_pub.try_into().unwrap();
+            let mut tmp = ExtendedKey::try_from_pub(child_pub).unwrap();
             tmp.chain_code = child_chain_code;
             tmp.child_num = child_num;
             tmp.depth = 1;
@@ -520,5 +319,27 @@ mod tests {
         };
 
         assert_eq!(child_0, child_1);
+    }
+
+    #[test]
+    fn pub_test_003_extend_key_derive_child_hardened() {
+        let sig_params = M31JubJubSigParams::default();
+        let private_key: Fs = thread_rng().gen();
+        let public_key = sig_params.public_key(private_key);
+
+        let ext: ExtendedKey<Fs, PublicKeyType> = ExtendedKey::try_from_pub(public_key).unwrap();
+
+        // hardened child cannot be derived from public key
+        assert!(ext.derive_child((1<<31) + 44).is_none());
+    }
+
+    #[test]
+    fn pub_test_004_derive_pub() {
+        let sig_params = M31JubJubSigParams::default();
+        let private_key: Fs = thread_rng().gen();
+        let public_key = sig_params.public_key(private_key);
+        assert!(derive_pub(&public_key, &MASTER_CHAIN_CODE[..], 0).is_some());
+        assert!(derive_pub(&public_key, &MASTER_CHAIN_CODE[..], 1<<31).is_none());
+        assert!(internal::derive_pub_unchecked(&public_key, &MASTER_CHAIN_CODE[..], 1<<31).is_some());
     }
 }
