@@ -140,7 +140,7 @@ impl To33Bytes for PublicKeyType {
     const PADDING_LEN: usize = PUB_PRIV_UNION_SIZE - PUB_SIZE;
     #[must_use]
     fn to_33_bytes(&self, target: &mut [u8]) -> Option<()> {
-        if target.len() != 33 {
+        if target.len() != PUB_PRIV_UNION_SIZE {
             return None;
         }
         for i in 0..Self::PADDING_LEN {
