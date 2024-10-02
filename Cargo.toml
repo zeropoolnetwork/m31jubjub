@@ -5,16 +5,14 @@ edition = "2021"
 
 [dependencies]
 
-p3-mersenne-31 = {git="https://github.com/zeropoolnetwork/Plonky3.git", branch="fork/main"}
-p3-field = {git="https://github.com/zeropoolnetwork/Plonky3.git", branch="fork/main"}
-p3-poseidon2 = {git="https://github.com/zeropoolnetwork/Plonky3.git", branch="fork/main"}
-p3-mds = {git="https://github.com/zeropoolnetwork/Plonky3.git", branch="fork/main"}
-p3-symmetric = {git="https://github.com/zeropoolnetwork/Plonky3.git", branch="fork/main"}
+p3-mersenne-31 = {git="https://github.com/zeropoolnetwork/Plonky3.git", branch="fork/feature/cfft-symmetric-compatibility"}
+p3-field = {git="https://github.com/zeropoolnetwork/Plonky3.git", branch="fork/feature/cfft-symmetric-compatibility"}
+p3-poseidon2 = {git="https://github.com/zeropoolnetwork/Plonky3.git", branch="fork/feature/cfft-symmetric-compatibility"}
+p3-symmetric = {git="https://github.com/zeropoolnetwork/Plonky3.git", branch="fork/feature/cfft-symmetric-compatibility"}
 
-rand_core = "0.6.4"
-rand = "0.8.5"
-rand_chacha = "0.3.1"
-serde = { version = "1.0", default-features = false, features = ["derive"] }
+
+primitives = {git="https://github.com/zeropoolnetwork/sharded-storage.git", branch="main"}
+
 ark-ff = "0.4.2"
 ark-serialize = "*"
 generic-array = { version = "*" }
@@ -31,7 +29,7 @@ pbkdf2 = "0.12"
 zerocopy = "0.7.35"
 
 [dev-dependencies]
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+bincode = "1.3"
+rand = "0.8.5"
 libc-print = "*"
-
-#[dependencies.generic-array]
-#features = ["alloc"]

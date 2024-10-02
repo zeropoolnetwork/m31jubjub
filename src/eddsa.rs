@@ -36,7 +36,7 @@ pub trait SigParams<const HASHER_OUT: usize>: Clone {
         hashed_message: [Self::Fb; HASHER_OUT],
     ) -> <Self::P as Params>::Fs {
         let t = [point_r, point_a].iter()
-            .flat_map(|e| Self::Flattener::flatten(e).into_iter())
+            .flat_map(|e| Self::Flattener::flatten_iter(e)).copied()
             .chain(hashed_message.into_iter())
             .collect::<Vec<_>>();
 

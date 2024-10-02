@@ -4,13 +4,13 @@
 use p3_poseidon2::{Poseidon2, Poseidon2ExternalMatrixGeneral};
 use p3_mersenne_31::DiffusionMatrixMersenne31;
 use p3_symmetric::PaddingFreeSponge;
-use rand_chacha::ChaCha20Rng;
-use rand::SeedableRng;
 
 use crate::eddsa::SigParams;
 use crate::curve::{Params, PointProjective};
 use crate::m31::{Fq, FqBase, Fs, fq_new_from_raw};
 use crate::flatten::ComplexExtensionFlattener;
+
+use primitives::poseidon2_m31_hash;
 
 type Perm = Poseidon2<FqBase, Poseidon2ExternalMatrixGeneral, DiffusionMatrixMersenne31, 16, 5>;
 type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
@@ -47,18 +47,8 @@ impl M31JubJubSigParams {
 }
 
 impl Default for M31JubJubSigParams {
-    fn default() -> Self {
-        let mut rng = ChaCha20Rng::seed_from_u64(1);
-
-        let poseidon = Perm::new_from_rng_128(
-            <_>::default(),
-            <_>::default(),
-            &mut rng,
-        );
-
-        let hasher = MyHash::new(poseidon);
-    
-        M31JubJubSigParams::new(hasher)
+    fn default() -> Self {    
+        M31JubJubSigParams::new(poseidon2_m31_hash())
     }
 }
 
