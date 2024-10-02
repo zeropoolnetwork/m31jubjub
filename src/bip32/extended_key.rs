@@ -255,7 +255,8 @@ mod tests {
 
     #[test]
     fn find_prefix() {
-        let target_prefix = "mprv";
+        let target_prefix = "Aprv";
+//        let target_prefix = "Apub";
 
         let mut a = 0;
         let mut b = 0xffffffff;
@@ -280,8 +281,8 @@ mod tests {
                 break;
             }
             match s.as_str().cmp(target_prefix) {
-                core::cmp::Ordering::Less => a = t -1,
-                core::cmp::Ordering::Greater => b = t +1,
+                core::cmp::Ordering::Less => a = t +1,
+                core::cmp::Ordering::Greater => b = t -1,
                 core::cmp::Ordering::Equal => panic!("WTF?????????????"),
             }
         }
